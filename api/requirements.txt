@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12
+numpy>=1.24
+plyfile>=1.0
+# Install seg3d from sibling clone or GitHub:
+#   pip install -e ../../Segmentation_Multi-Order-RANSAC-DBSCAN
+#   # or: pip install "git+https://github.com/D-Caban/Segmentation_Multi-Order-RANSAC-DBSCAN.git"
+# Open3D is pulled in by seg3d; on Linux you may need:
+#   export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
