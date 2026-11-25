@@ -12,6 +12,7 @@ Open-source **web app** for uploading point clouds and Gaussian splat PLYs, navi
 - Optional **height (Y) filter**
 - Local **FastAPI** job that runs `seg3d selectables` (plane RANSAC + residual graph/DBSCAN → object PLYs + manifest)
 - Object list → click to highlight AABB / tint → **download object PLY**
+- **Viewport picking:** click a point belonging to a segmented object to select it (syncs Objects panel)
 
 ## Stack
 

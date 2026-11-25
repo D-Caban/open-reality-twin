@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { SceneViewer } from './components/SceneViewer'
 import { health, objectDownloadUrl, segmentJob, uploadPly, type SegObject, type SegmentResult } from './lib/api'
+import { buildPointObjectIndex } from './lib/pick'
 import { loadPly, type PlyCloud } from './lib/ply'
 
 type Mode = 'landing' | 'app'
@@ -19,6 +20,7 @@ export default function App() {
   const [heightFilterOn, setHeightFilterOn] = useState(false)
   const [heightRange, setHeightRange] = useState<[number, number]>([0, 1])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const objectListRef = useRef<HTMLUListElement>(null)
 
   useEffect(() => {
     health()
@@ -30,6 +32,23 @@ export default function App() {
     if (!cloud) return [0, 1] as [number, number]
     return [cloud.bbox.min[1], cloud.bbox.max[1]] as [number, number]
   }, [cloud])
+
+  const objects = result?.objects ?? []
+
+  const pointObjectIndex = useMemo(() => {
+    if (!cloud || !objects.length) return null
+    return buildPointObjectIndex(cloud, objects)
+  }, [cloud, objects])
+
+  const selectObject = useCallback((obj: SegObject | null) => {
+    setSelected(obj)
+  }, [])
+
+  useEffect(() => {
+    if (!selected) return
+    const el = objectListRef.current?.querySelector<HTMLElement>(`[data-object-id="${selected.id}"]`)
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selected])
 
   const ingestFile = useCallback(async (file: File) => {
     setError(null)
@@ -111,13 +130,21 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (params.get('demo') === '1') {
+    if (params.get('demo') === '1' || params.get('pickdemo') === '1') {
       setMode('app')
       void loadDemo()
     }
-    // One-shot boot from ?demo=1
+    // One-shot boot from ?demo=1 / ?pickdemo=1
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Auto-segment for pick demos once a job exists
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('pickdemo') !== '1') return
+    if (!jobId || result || busy) return
+    void runSegment()
+  }, [jobId, result, busy, runSegment])
 
   return (
     <div className="app-shell">
@@ -272,13 +299,14 @@ export default function App() {
                   Run segmentation to list structure planes and residual objects.
                 </p>
               ) : (
-                <ul className="object-list">
+                <ul className="object-list" ref={objectListRef}>
                   {result.objects.map((obj) => (
                     <li key={obj.id}>
                       <button
                         type="button"
+                        data-object-id={obj.id}
                         className={selected?.id === obj.id ? 'selected' : ''}
-                        onClick={() => setSelected(obj)}
+                        onClick={() => selectObject(obj)}
                       >
                         <span>
                           {obj.label} · {obj.id}
@@ -304,12 +332,18 @@ export default function App() {
           <div className="viewer-wrap">
             <SceneViewer
               cloud={cloud}
+              objects={objects}
               selected={selected}
+              pointObjectIndex={pointObjectIndex}
               heightMin={heightRange[0]}
               heightMax={heightRange[1]}
               heightFilterOn={heightFilterOn}
+              onSelectObject={selectObject}
             />
-            <div className="overlay-hint">Orbit · drag · scroll to zoom · click an object to highlight</div>
+            <div className="overlay-hint">
+              Orbit drag · scroll zoom · click points to select objects
+              {selected ? ` · selected ${selected.id}` : objects.length ? ' · segment ready' : ''}
+            </div>
           </div>
         </div>
       )}

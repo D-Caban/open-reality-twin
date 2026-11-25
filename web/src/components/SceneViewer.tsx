@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { Canvas, useThree } from '@react-three/fiber'
+import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import type { PlyCloud } from '../lib/ply'
 import type { SegObject } from '../lib/api'
+import { objectAtPoint } from '../lib/pick'
 
 type Props = {
   cloud: PlyCloud | null
+  objects: SegObject[]
   selected: SegObject | null
+  pointObjectIndex: Int32Array | null
   heightMin: number
   heightMax: number
   heightFilterOn: boolean
+  onSelectObject: (obj: SegObject | null) => void
 }
+
+const CLICK_PX = 6
 
 function FitCamera({ cloud }: { cloud: PlyCloud }) {
   const { camera, controls } = useThree()
@@ -39,21 +45,38 @@ function FitCamera({ cloud }: { cloud: PlyCloud }) {
   return null
 }
 
+function PickThreshold({ cloud }: { cloud: PlyCloud }) {
+  const { raycaster } = useThree()
+  useEffect(() => {
+    const { min, max } = cloud.bbox
+    const diag = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2])
+    raycaster.params.Points = { threshold: Math.max(diag * 0.01, 0.05) }
+  }, [cloud, raycaster])
+  return null
+}
+
 function PointCloud({
   cloud,
+  objects,
   selected,
+  pointObjectIndex,
   heightMin,
   heightMax,
   heightFilterOn,
+  onSelectObject,
 }: Props & { cloud: PlyCloud }) {
+  const pointer = useRef<{ x: number; y: number } | null>(null)
+  const indexMap = useRef<Int32Array | null>(null)
+
   const geom = useMemo(() => {
     const g = new THREE.BufferGeometry()
     const n = cloud.count
     const pos = new Float32Array(n * 3)
     const col = new Float32Array(n * 3)
+    const srcIndex = new Int32Array(n)
     let write = 0
-    const selMin = selected?.aabb.min
-    const selMax = selected?.aabb.max
+    const selId = selected?.id ?? null
+    const useIndex = Boolean(selId && pointObjectIndex && pointObjectIndex.length === n)
 
     for (let i = 0; i < n; i++) {
       const x = cloud.positions[i * 3]
@@ -64,19 +87,33 @@ function PointCloud({
       pos[write * 3] = x
       pos[write * 3 + 1] = y
       pos[write * 3 + 2] = z
+      srcIndex[write] = i
 
       let r = cloud.colors[i * 3]
       let gch = cloud.colors[i * 3 + 1]
       let b = cloud.colors[i * 3 + 2]
 
-      if (selMin && selMax) {
+      if (useIndex && pointObjectIndex) {
+        const oi = pointObjectIndex[i]
+        const obj = oi >= 0 ? objects[oi] : null
+        if (obj?.id === selId) {
+          r = 0.35
+          gch = 0.85
+          b = 1.0
+        } else {
+          r *= 0.35
+          gch *= 0.35
+          b *= 0.35
+        }
+      } else if (selected?.aabb) {
+        const { min, max } = selected.aabb
         const inside =
-          x >= selMin[0] &&
-          x <= selMax[0] &&
-          y >= selMin[1] &&
-          y <= selMax[1] &&
-          z >= selMin[2] &&
-          z <= selMax[2]
+          x >= min[0] &&
+          x <= max[0] &&
+          y >= min[1] &&
+          y <= max[1] &&
+          z >= min[2] &&
+          z <= max[2]
         if (inside) {
           r = 0.35
           gch = 0.85
@@ -94,23 +131,38 @@ function PointCloud({
       write++
     }
 
+    indexMap.current = srcIndex.subarray(0, write)
     g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, write * 3), 3))
     g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, write * 3), 3))
     g.computeBoundingSphere()
     return g
-  }, [cloud, selected, heightMin, heightMax, heightFilterOn])
+  }, [cloud, objects, selected, pointObjectIndex, heightMin, heightMax, heightFilterOn])
 
-  const matRef = useRef<THREE.PointsMaterial>(null)
+  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    pointer.current = { x: e.clientX, y: e.clientY }
+  }
+
+  const onPointerUp = (e: ThreeEvent<PointerEvent>) => {
+    const start = pointer.current
+    pointer.current = null
+    if (!start) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    if (dx * dx + dy * dy > CLICK_PX * CLICK_PX) return
+    if (!objects.length) return
+
+    e.stopPropagation()
+    const idx = e.index
+    if (idx == null || idx < 0) return
+    const map = indexMap.current
+    const src = map ? map[idx] : idx
+    const obj = objectAtPoint(cloud, objects, src, pointObjectIndex)
+    onSelectObject(obj)
+  }
 
   return (
-    <points geometry={geom}>
-      <pointsMaterial
-        ref={matRef}
-        vertexColors
-        size={0.035}
-        sizeAttenuation
-        depthWrite={false}
-      />
+    <points geometry={geom} onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
+      <pointsMaterial vertexColors size={0.035} sizeAttenuation depthWrite={false} />
     </points>
   )
 }
@@ -129,7 +181,7 @@ function SelectionBox({ selected }: { selected: SegObject | null }) {
     number,
   ]
   return (
-    <mesh position={center}>
+    <mesh position={center} raycast={() => null}>
       <boxGeometry args={size} />
       <meshBasicMaterial color="#7eb8c9" wireframe transparent opacity={0.85} />
     </mesh>
@@ -147,6 +199,7 @@ export function SceneViewer(props: Props) {
       <ambientLight intensity={0.6} />
       {props.cloud ? (
         <>
+          <PickThreshold cloud={props.cloud} />
           <PointCloud {...props} cloud={props.cloud} />
           <SelectionBox selected={props.selected} />
           <FitCamera cloud={props.cloud} />
